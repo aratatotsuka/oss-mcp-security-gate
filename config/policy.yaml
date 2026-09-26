@@ -1,0 +1,8 @@
+{
+  "policy_version": "1.0.0",
+  "vulnerability_db_max_age_hours": 72,
+  "advisory_review_max_age_days": 30,
+  "scorecard_review_below": 7,
+  "exceptions_require_expiry": true,
+  "fail_closed": true
+}

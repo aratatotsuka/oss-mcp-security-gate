@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://security-gate.local/schemas/finding.schema.json",
+  "type": "object",
+  "required": ["schema_version","scanner","scanner_version","scanner_artifact_digest","target_id","category","finding_id","severity","confidence","title","scan_status"],
+  "properties": {
+    "schema_version": {"const":"1.0"},
+    "scanner": {"type":"string","minLength":1},
+    "scanner_version": {"type":"string","minLength":1},
+    "scanner_artifact_digest": {"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "target_id": {"type":"string","minLength":1},
+    "category": {"type":"string","minLength":1},
+    "finding_id": {"type":"string","minLength":1},
+    "severity": {"enum":["UNKNOWN","INFO","LOW","MEDIUM","HIGH","CRITICAL"]},
+    "confidence": {"enum":["LOW","MEDIUM","HIGH"]},
+    "title": {"type":"string","minLength":1},
+    "description": {"type":"string"},
+    "component": {"type":"string"},
+    "installed_version": {"type":"string"},
+    "fixed_version": {"type":"string"},
+    "exploitability": {"type":"string"},
+    "evidence": {"type":"object"},
+    "references": {"type":"array","items":{"type":"string"}},
+    "remediation": {"type":"string"},
+    "scan_status": {"enum":["COMPLETE","PARTIAL","FAILED","TIMEOUT","UNSUPPORTED"]}
+  },
+  "additionalProperties": false
+}

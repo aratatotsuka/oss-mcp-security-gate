@@ -1,0 +1,5 @@
+FROM scratch
+ARG SCANNER_FILE=scanner
+COPY --chown=65532:65532 ${SCANNER_FILE} /scanner
+USER 65532:65532
+ENTRYPOINT ["/scanner"]

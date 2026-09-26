@@ -1,0 +1,11 @@
+format: json
+scanners:
+  - vuln
+  - misconfig
+  - secret
+skip-db-update: true
+skip-java-db-update: true
+skip-check-update: true
+offline-scan: true
+disable-telemetry: true
+ignore-unfixed: false

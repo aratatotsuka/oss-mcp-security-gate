@@ -1,0 +1,8 @@
+{
+  "scanner": "trivy",
+  "version": "db-2026-09-24T00:00:00Z",
+  "signature_verified": true,
+  "provenance_verified": true,
+  "approver": "security-team@example.invalid",
+  "evidence": "SEC-1234; transparency log and upstream digest checked"
+}

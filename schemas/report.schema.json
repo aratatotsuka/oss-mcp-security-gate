@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://security-gate.local/schemas/report.schema.json",
+  "type": "object",
+  "required": ["schema_version","scan_id","target_id","target_type","generated_at","policy_version","decision","reasons","scanner_runs","findings","result_hash"],
+  "properties": {
+    "schema_version":{"const":"1.0"}, "scan_id":{"type":"string"}, "target_id":{"type":"string"},
+    "target_type":{"enum":["oss","mcp-static"]}, "generated_at":{"type":"string","format":"date-time"},
+    "policy_version":{"type":"string"}, "decision":{"enum":["ALLOW","REVIEW","BLOCK","ERROR"]},
+    "reasons":{"type":"array","items":{"type":"string"}}, "scanner_runs":{"type":"array"}, "findings":{"type":"array"},
+    "exceptions_used":{"type":"array"}, "result_hash":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}, "metadata":{"type":"object"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,4 @@
+/bin/
+/var/
+security-gate-report.json
+*.tmp

@@ -1,0 +1,4 @@
+[extend]
+useDefault = true
+
+# Intentionally no allowlist. Target-provided configuration is never loaded.

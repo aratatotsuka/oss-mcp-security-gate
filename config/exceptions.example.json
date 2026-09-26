@@ -1,0 +1,11 @@
+[
+  {
+    "finding_id": "GHSA-example",
+    "justification": "Not reachable in the deployed execution path; see approved threat analysis.",
+    "approver": "security-team@example.invalid",
+    "created_at": "2026-09-24T00:00:00Z",
+    "expires_at": "2026-10-24T00:00:00Z",
+    "scope": "/absolute/path/to/one/target",
+    "evidence": {"ticket":"SEC-1234"}
+  }
+]
