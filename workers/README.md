@@ -1,6 +1,14 @@
 # Worker image admission
 
-`workers/static/Dockerfile` is a minimal template for an already-verified, statically linked scanner binary. Build context must contain only the approved binary named `scanner`. Never build it from the hostile target and never let Scan Pipeline run `docker build`.
+`workers/static/Dockerfile` is a minimal template for a statically linked scanner binary. Build context contains the binary named `scanner`, `ca-certificates.crt`, and the Dockerfile. Never build it from the hostile target and never let Scan Pipeline run `docker build`.
+
+## Local deployment
+
+`scripts/deploy-oss.ps1 -PrepareOnly` stages OSV, Trivy, Gitleaks and OPA on a Docker Linux engine. It checks official HTTPS asset digests and advisory changes, safely extracts binaries, checks versions and Rego tests, builds scratch images, and records local content-addressed `sha256:<image-id>` references. No registry is required on this same engine. DB updates have no target mount; actual scans have no network and use read-only target/config/cache mounts. The CA bundle is fetched from curl's HTTPS distribution with its published checksum.
+
+This mode does **not** verify release signatures, SLSA build provenance or DB publisher signatures. Activation explicitly requires `-AcceptOfficialDigestPolicy`; the receipt and manifest state that scope. See [deployment instructions](../docs/oss-deployment.md). An organization requiring the stronger policy below must complete those checks before production admission.
+
+## Organization policy with signatures and provenance
 
 The Update Pipeline must:
 

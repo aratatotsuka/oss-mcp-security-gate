@@ -12,6 +12,7 @@ import (
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/exception"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/model"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/runner"
+	"github.com/aratatotsuka/oss-mcp-security-gate/internal/sandbox"
 )
 
 type Config struct {
@@ -133,13 +134,29 @@ func Evaluate(in model.PolicyInput) model.PolicyDecision {
 }
 
 func EvaluateOPA(opaPath, policyDir string, in model.PolicyInput, timeout time.Duration) (model.PolicyDecision, error) {
+	return evaluateCommand(opaPath, []string{"eval", "--fail", "--format=json", "--data", policyDir, "--stdin-input", "data.security_gate.result"}, in, timeout)
+}
+
+func EvaluateRuntime(image, opaPath, policyDir string, in model.PolicyInput, timeout time.Duration) (model.PolicyDecision, error) {
+	if image == "" {
+		return EvaluateOPA(opaPath, policyDir, in, timeout)
+	}
+	args, err := sandbox.DockerArgs(sandbox.DockerSpec{Image: image, Config: policyDir, Network: "none", Command: []string{"eval", "--fail", "--format=json", "--data", "/gate/config", "--stdin-input", "data.security_gate.result"}})
+	if err != nil {
+		return model.PolicyDecision{}, err
+	}
+	args = append([]string{args[0], "--pull", "never", "-i"}, args[1:]...)
+	return evaluateCommand("docker", args, in, timeout)
+}
+
+func evaluateCommand(name string, args []string, in model.PolicyInput, timeout time.Duration) (model.PolicyDecision, error) {
 	b, err := json.Marshal(in)
 	if err != nil {
 		return model.PolicyDecision{}, err
 	}
-	r := runner.Run(context.Background(), runner.Spec{Name: opaPath, Args: []string{"eval", "--fail", "--format=json", "--data", policyDir, "--stdin-input", "data.security_gate.result"}, Timeout: timeout, OutputLimit: 2 << 20, Stdin: b})
+	r := runner.Run(context.Background(), runner.Spec{Name: name, Args: args, Timeout: timeout, OutputLimit: 2 << 20, Stdin: b})
 	if r.Err != nil {
-		return model.PolicyDecision{}, fmt.Errorf("OPA_POLICY_EVALUATION_FAILURE: %w: %s", r.Err, string(r.Output))
+		return model.PolicyDecision{}, fmt.Errorf("OPA_POLICY_EVALUATION_FAILURE: %w: %s", r.Err, string(r.Stderr))
 	}
 	var out struct {
 		Result []struct {

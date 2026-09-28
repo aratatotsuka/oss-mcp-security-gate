@@ -29,9 +29,9 @@ func DockerCommand(s manifest.Scanner, r Request) ([]string, error) {
 	cmd := []string{}
 	switch s.Name {
 	case "osv-scanner":
-		cmd = []string{"scan", "source", "--recursive", "--format=json", "--offline-vulnerabilities", "--no-resolve", "--config=/gate/config/osv-scanner.toml", "/target"}
+		cmd = []string{"scan", "source", "--recursive", "--format=json", "--offline", "--local-db-path=/gate/cache", "--no-call-analysis", "--config=/gate/config/osv-scanner.toml", "/target"}
 	case "trivy":
-		cmd = []string{"fs", "--config=/gate/config/trivy.yaml", "--format=json", "--scanners=vuln,misconfig,secret", "--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan", "--disable-telemetry", "--no-progress", "--cache-dir=/gate/cache", "/target"}
+		cmd = []string{"fs", "--config=/gate/config/trivy.yaml", "--format=json", "--scanners=vuln,misconfig,secret", "--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan", "--disable-telemetry", "--no-progress", "--cache-backend=memory", "--cache-dir=/gate/cache", "/target"}
 	case "gitleaks":
 		cmd = []string{"dir", "/target", "--config=/gate/config/gitleaks.toml", "--report-format=json", "--report-path=/dev/stdout", "--redact=100", "--no-banner", "--max-archive-depth=0"}
 	case "mcp-scanner":
@@ -59,7 +59,10 @@ func DockerCommand(s manifest.Scanner, r Request) ([]string, error) {
 	if r.ConfigRoot == "" {
 		return nil, fmt.Errorf("trusted config root is required")
 	}
-	cache := filepath.Join(r.CacheRoot, s.Name)
+	cache := CachePath(s, r)
+	if s.Name == "gitleaks" {
+		cache = "" // Gitleaks needs no DB; do not mount a nonexistent cache directory.
+	}
 	args, err := sandbox.DockerArgs(sandbox.DockerSpec{Image: s.WorkerImage, Target: r.Target, Cache: cache, Config: r.ConfigRoot, Network: s.Network, Command: cmd, Limits: sandbox.Limits{CPUs: "1.0", Memory: "768m", Tmpfs: "64m", PIDs: 128}})
 	if err != nil {
 		return nil, err
@@ -69,6 +72,10 @@ func DockerCommand(s manifest.Scanner, r Request) ([]string, error) {
 		return nil, fmt.Errorf("prohibited Docker capability")
 	}
 	return args, nil
+}
+
+func CachePath(s manifest.Scanner, r Request) string {
+	return filepath.Join(r.CacheRoot, s.Name, s.CacheGeneration)
 }
 
 func safeRelative(root, p string) (string, error) {

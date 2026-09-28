@@ -42,3 +42,25 @@ func TestDockerCommandRejectsMCPSnapshotOutsideTarget(t *testing.T) {
 		t.Fatalf("outside MCP snapshot accepted: %v", err)
 	}
 }
+
+func TestOfflineCacheGenerationIsMountedAndUsed(t *testing.T) {
+	for _, name := range []string{"osv-scanner", "trivy"} {
+		s := manifest.Scanner{Name: name, WorkerImage: "sha256:" + strings.Repeat("a", 64), Network: "none", CacheGeneration: "generation-1"}
+		r := Request{Target: t.TempDir(), CacheRoot: t.TempDir(), ConfigRoot: t.TempDir()}
+		args, err := DockerCommand(s, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "generation-1,dst=/gate/cache,readonly") || !strings.Contains(joined, "--network none") || !strings.Contains(joined, "--pull never") {
+			t.Fatal(joined)
+		}
+		want := "--local-db-path=/gate/cache"
+		if name == "trivy" {
+			want = "--cache-backend=memory"
+		}
+		if !strings.Contains(joined, want) {
+			t.Fatal(joined)
+		}
+	}
+}

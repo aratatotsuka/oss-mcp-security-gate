@@ -14,17 +14,49 @@ import (
 )
 
 func Seal(r *model.Report) error {
+	r.ScanID = secret.Text(r.ScanID)
+	r.TargetID = secret.Text(r.TargetID)
+	r.TargetType = secret.Text(r.TargetType)
+	r.PolicyVersion = secret.Text(r.PolicyVersion)
+	for i := range r.Reasons {
+		r.Reasons[i] = secret.Text(r.Reasons[i])
+	}
+	for i := range r.ScannerRuns {
+		x := &r.ScannerRuns[i]
+		x.Scanner = secret.Text(x.Scanner)
+		x.Version = secret.Text(x.Version)
+		x.ArtifactDigest = secret.Text(x.ArtifactDigest)
+		x.DBVersion = secret.Text(x.DBVersion)
+		x.ErrorCode = secret.Text(x.ErrorCode)
+		x.Message = secret.Text(x.Message)
+	}
 	for i := range r.Findings {
+		r.Findings[i].Scanner = secret.Text(r.Findings[i].Scanner)
+		r.Findings[i].ScannerVersion = secret.Text(r.Findings[i].ScannerVersion)
+		r.Findings[i].ScannerArtifactDigest = secret.Text(r.Findings[i].ScannerArtifactDigest)
+		r.Findings[i].TargetID = secret.Text(r.Findings[i].TargetID)
+		r.Findings[i].Category = secret.Text(r.Findings[i].Category)
+		r.Findings[i].FindingID = secret.Text(r.Findings[i].FindingID)
 		r.Findings[i].Title = secret.Text(r.Findings[i].Title)
 		r.Findings[i].Description = secret.Text(r.Findings[i].Description)
+		r.Findings[i].Component = secret.Text(r.Findings[i].Component)
+		r.Findings[i].InstalledVersion = secret.Text(r.Findings[i].InstalledVersion)
+		r.Findings[i].FixedVersion = secret.Text(r.Findings[i].FixedVersion)
+		r.Findings[i].Exploitability = secret.Text(r.Findings[i].Exploitability)
+		r.Findings[i].Remediation = secret.Text(r.Findings[i].Remediation)
+		for j := range r.Findings[i].References {
+			r.Findings[i].References[j] = secret.Text(r.Findings[i].References[j])
+		}
 		r.Findings[i].Evidence = secret.Evidence(r.Findings[i].Evidence)
 	}
 	for i := range r.ExceptionsUsed {
+		r.ExceptionsUsed[i].FindingID = secret.Text(r.ExceptionsUsed[i].FindingID)
 		r.ExceptionsUsed[i].Justification = secret.Text(r.ExceptionsUsed[i].Justification)
 		r.ExceptionsUsed[i].Approver = secret.Text(r.ExceptionsUsed[i].Approver)
 		r.ExceptionsUsed[i].Scope = secret.Text(r.ExceptionsUsed[i].Scope)
 		r.ExceptionsUsed[i].Evidence = secret.Evidence(r.ExceptionsUsed[i].Evidence)
 	}
+	r.Metadata = secret.Evidence(r.Metadata)
 	r.ResultHash = ""
 	b, err := json.Marshal(r)
 	if err != nil {
