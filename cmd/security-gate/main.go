@@ -7,15 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/aratatotsuka/oss-mcp-security-gate/internal/deploy"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/integrity"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/manifest"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/model"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/orchestrator"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/policy"
-	"github.com/aratatotsuka/oss-mcp-security-gate/internal/runner"
+	"github.com/aratatotsuka/oss-mcp-security-gate/internal/report"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/scanners"
 )
 
@@ -88,7 +88,8 @@ func scan(args []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", e)
 		return 4
 	}
-	b, _ := json.MarshalIndent(map[string]any{"decision": rpt.Decision, "reasons": rpt.Reasons, "report": o}, "", "  ")
+	paths := report.Paths(o)
+	b, _ := json.MarshalIndent(map[string]any{"decision": rpt.Decision, "reasons": rpt.Reasons, "report": o, "report_html": paths.HTML, "report_markdown": paths.Markdown, "findings_csv": paths.FindingsCSV, "review_required_csv": paths.ReviewRequiredCSV}, "", "  ")
 	fmt.Println(string(b))
 	return decisionCode(rpt.Decision)
 }
@@ -96,29 +97,55 @@ func scan(args []string) int {
 func verify(args []string) int {
 	fs := flag.NewFlagSet("verify-scanners", flag.ContinueOnError)
 	root := fs.String("root", rootDefault(), "trusted Security Gate root")
+	typ := fs.String("type", "", "verify only oss or mcp-static scanners and OPA")
+	manifestPath := fs.String("manifest", "", "candidate manifest to verify before activation")
 	if fs.Parse(args) != nil {
 		return 64
 	}
 	r, _ := filepath.Abs(*root)
-	m, e := manifest.Load(filepath.Join(r, "config", "scanners.yaml"))
+	if *typ != "" && *typ != "oss" && *typ != "mcp-static" {
+		fmt.Fprintln(os.Stderr, "invalid type")
+		return 64
+	}
+	if *manifestPath == "" {
+		*manifestPath = filepath.Join(r, "config", "scanners.yaml")
+	}
+	m, e := manifest.Load(*manifestPath)
 	if e != nil {
 		fmt.Fprintln(os.Stderr, e)
 		return 4
 	}
 	all := true
 	results := []integrity.Result{}
+	if *typ != "" {
+		for _, name := range append(scanners.Required(scanners.Request{Type: *typ}), "opa") {
+			if _, ok := m.Get(name); !ok {
+				fmt.Fprintln(os.Stderr, "required scanner missing:", name)
+				return 4
+			}
+		}
+	}
 	for _, s := range m.Scanners {
+		if *typ != "" {
+			wanted := s.Name == "opa"
+			for _, n := range scanners.Required(scanners.Request{Type: *typ}) {
+				wanted = wanted || n == s.Name
+			}
+			if !wanted {
+				continue
+			}
+		}
 		x := integrity.Verify(r, s)
-		if x.OK && s.Name != "opa" {
-			if strings.Contains(s.WorkerImage, "sha256:"+strings.Repeat("0", 64)) {
+		if x.OK && (s.Name != "opa" || s.WorkerImage != "") {
+			if err := integrity.VerifyImage(context.Background(), s.WorkerImage); err != nil {
 				x.OK = false
-				x.Error = "UNSUPPORTED_SECURITY_REQUIREMENT: verified internal worker image is not provisioned"
-			} else {
-				ir := runner.Run(context.Background(), runner.Spec{Name: "docker", Args: []string{"image", "inspect", s.WorkerImage, "--format", "{{json .RepoDigests}}"}, Timeout: 10 * time.Second, OutputLimit: 1 << 20})
-				if ir.Err != nil || !strings.Contains(string(ir.Output), strings.Split(s.WorkerImage, "@sha256:")[1]) {
-					x.OK = false
-					x.Error = "UNVERIFIED_SCANNER_IMAGE: pinned worker image is absent or digest does not match"
-				}
+				x.Error = err.Error()
+			}
+		}
+		if x.OK && (s.Name == "osv-scanner" || s.Name == "trivy") {
+			if _, err := deploy.VerifyCache(scanners.CachePath(s, scanners.Request{CacheRoot: filepath.Join(r, "var", "cache")})); err != nil {
+				x.OK = false
+				x.Error = "DB_INTEGRITY_FAILURE: " + err.Error()
 			}
 		}
 		results = append(results, x)
@@ -169,7 +196,7 @@ func policyCheck(args []string) int {
 	}
 	in.PolicyVersion = policyConfig.PolicyVersion
 	in.Policy = policyConfig.Settings()
-	d, e := policy.EvaluateOPA(filepath.Join(r, opa.RuntimePath), filepath.Join(r, "policies"), in, 10*time.Second)
+	d, e := policy.EvaluateRuntime(opa.WorkerImage, filepath.Join(r, opa.RuntimePath), filepath.Join(r, "policies"), in, 10*time.Second)
 	if e != nil {
 		fmt.Fprintln(os.Stderr, e)
 		return 4

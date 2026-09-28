@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | ソース取得 | Git | `git --version` |
 | ビルド・Goテスト | Go 1.24以上 | `go version` |
-| 開発用Regoテスト・ポリシー評価 | OPA CLI 1.21.0 | `opa version` |
+| 開発用Regoテスト・Go連携テスト | OPA CLI 1.21.0 | `opa version` |
 | Windowsの補助スクリプト | Windows PowerShell 5.1以上またはPowerShell 7 | `$PSVersionTable.PSVersion` |
 | 実スキャン・隔離テスト | Docker CLIと稼働中のLinux engine | `docker info --format '{{.OSType}}'`（`linux`） |
 
-GoとOPAは実行ファイルを`PATH`から呼べるようにします。Goのツールチェーンはリポジトリ外にインストールします。OPAはビルドだけなら不要ですが、Regoテスト、GoからのOPA連携テスト、実際のポリシー判定に必要です。Dockerは通常のGo/OPAテストとビルドには不要です。Windowsは開発・単体テスト用で、本番の隔離実行はhardening済みLinux workerを使用します。以下のコマンド例はWindows amd64 / Linux amd64向けです。他のCPUでは対応する公式配布物を選んでください。
+Goと開発用OPAは実行ファイルを`PATH`から呼べるようにします。Goのツールチェーンはリポジトリ外にインストールします。ここで入れるOPAは`opa test policies --fail-on-empty`と、`OPA_TEST_BIN`を使うGo連携テストのためのものです。**`security-gate scan`と`policy-check`はPATH上のOPAを使いません。** 両コマンドは`config/scanners.yaml`で固定したOPAを使います。`deploy-oss.ps1`で配備した場合はLinuxコンテナで実行し、`worker_image`が空の場合は`runtime_path`の実行ファイルを使います。OPAはCLIのビルドだけなら不要です。Dockerは通常のGo/OPAテストとビルドには不要です。WindowsからもDockerのLinux engine上で実スキャンできます。本番の隔離基盤はhardening済みLinux workerで確認してください。以下のコマンド例はWindows amd64 / Linux amd64向けです。他のCPUでは対応する公式配布物を選んでください。
 
 ## 2. ソースを用意する
 
@@ -49,7 +49,17 @@ cd security-gate
 }
 ```
 
-`opa version`が`1.21.0`を表示することを確認します。次回以降のPowerShellでも使うには、Windowsの「環境変数」でユーザーの`Path`に`$HOME\Tools\OPA`の実際の絶対パスを追加し、新しいPowerShellを開きます。
+`opa version`が`1.21.0`を表示することを確認します。上のブロックの`$env:Path`変更は、実行中のPowerShellでだけ有効です。インストール後に別のPowerShellを開いて`opa`が認識されない場合は、次を実行します。
+
+```powershell
+$opaDir = Join-Path $HOME 'Tools\OPA'
+$env:Path = "$opaDir;$env:Path"
+opa version
+```
+
+この`$env:Path`設定は現在のターミナルに限られます。次回以降も使うには、Windowsの「環境変数」→ユーザー環境変数の`Path`に`$HOME\Tools\OPA`の実際の絶対パス（例: `C:\Users\<ユーザー名>\Tools\OPA`）を追加します。VS Codeを使用している場合は、すべてのウィンドウを終了してから起動し直し、新しいPowerShellターミナルで`opa version`を実行してください。「Reload Window」やターミナルの作り直しだけでは、古い`Path`が残る場合があります。
+
+`opa`が認識されないときは、`& (Join-Path $HOME 'Tools\OPA\opa.exe') version`で実行ファイルを直接確認してください。これが動くなら再インストールは不要です。
 
 ### Linux
 
@@ -139,15 +149,55 @@ CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/security-gate ./cmd/sec
 
 ## 6. 実スキャン用の配備
 
-ビルド直後の`config/scanners.yaml`には未配備を表すzero digestが入っています。scanner artifact、内部worker image、offline DBを用意していない状態で`scan`や`verify-scanners`が失敗するのは意図した動作です。開発テストのためにzero digestを架空のdigestに置き換えないでください。
+**`update-security-data.ps1 -Execute`の次は、`deploy-oss.ps1`を使います。** 取得済みartifactを検証して、Docker image、OSV/Trivyのoffline DB、OPAの実行環境をまとめて用意します。詳しい説明・検証方式・定期更新は[OSS実スキャンの準備と実行](oss-deployment.md)を参照してください。
 
-配備責任者は、targetとは分離したUpdate workerで次を行います。
+| 用意するもの | 目的 |
+| --- | --- |
+| OSV・Trivy・Gitleaks | 依存関係の脆弱性、設定不備、secretを調べる |
+| Linux Docker image | 対象を読み取り専用で渡し、通信と権限を制限して実行する |
+| OSV/TrivyのDB・checks | スキャン中に通信せず、取得済み情報で検査する |
+| OPA Docker image | 検出結果とpolicyから総合判定を出す |
 
-1. `scripts/update-security-data.ps1 -Scanner osv-scanner`などで取得計画を確認します。`-Execute`はquarantineへの取得とSHA-256検証までで、署名・provenance・advisoryの承認は完了しません。
-2. 各scannerの署名、provenance、Security Advisoryを確認し、承認済みartifactをmanifestの`runtime_path`へ配置します。worker imageを内部のimmutable registryへ登録し、`worker_image`に実際の`image@sha256:...`を記録します。
-3. OSV-ScannerとTrivyのoffline DB/check bundleを別pipelineで取得・検証し、`scripts/admit-security-data.ps1`で承認済みcacheへ入れます。scan workerには読み取り専用で渡します。
-4. DockerのLinux engineから承認済みimage digestを参照できるようにし、`./bin/security-gate verify-scanners --root <Security Gateのルート>`を実行します。Windowsでは`./bin/security-gate.exe`を使います。
+### 6.1 準備モードで確認する
 
-具体的な承認・隔離条件は[詳細設計](detailed-design.md)と[worker image admission](../workers/README.md)を参照してください。Cisco MCP ScannerのPython base/依存lock、ScorecardのGitHub宛て通信制御、Gitleaksのprovenanceには[未解決の要件](../BLOCKED_SECURITY_REQUIREMENTS.md)があります。これらの条件が満たされるまで、本番用workerの配備完了とは扱いません。
+GoとDockerのLinux engineを利用できる状態で、リポジトリのルートから実行します。以下の`npm`はBacklog MCP ServerなどのJavaScript/TypeScript向けです。Goなら`Go`、Pythonなら`PyPI`を指定します。省略時はGoだけです。
 
-実scanner出力を使う任意のE2Eテストは[E2E fixtures](../tests/e2e/README.md)を参照してください。`SECURITY_GATE_REAL_E2E_DIR`が未設定なら、このテストはskipされます。
+```powershell
+docker info --format '{{.OSType}}'
+.\scripts\deploy-oss.ps1 -PrepareOnly -Ecosystem npm
+```
+
+通常のmanifestは変えず、`var/deploy/<実行ID>/prepared-root`に実行環境を作成します。既に取得した4製品のartifactはSHA-256が合えば再利用します。固定版は[manifest](../config/scanners.yaml)に従い、版の更新は[更新手順](scanner-version-update.md)で行います。
+
+**検証範囲:** このスクリプトは公式HTTPS配布元のrelease asset digest照合、Security Advisory差分確認、版・Regoテスト、DB全ファイルのハッシュ記録を行います。署名・build provenance・DBのpublisher署名の検証は行いません。その要件がある環境では[worker admission手順](../workers/README.md)で追加検証が必要です。manifestと配備記録にも未検証と明記し、検証済みとは記録しません。
+
+### 6.2 通常設定へ反映する
+
+上記の検証方式を採用する場合は、次を実行します。候補のartifact・image・DBを確認した後、manifestを一括で切り替えます。
+
+```powershell
+.\scripts\deploy-oss.ps1 -Ecosystem npm -AcceptOfficialDigestPolicy
+```
+
+`var/deploy/<実行ID>/deployment-receipt.json`に取得元・各ハッシュ・image IDが記録されます。以前のmanifestは同じフォルダの`scanners.before.yaml`へ保存し、古いDB世代も残します。
+
+### 6.3 スキャンする
+
+```powershell
+.\bin\security-gate.exe verify-scanners --root . --type oss
+.\scripts\scan-oss.ps1 -Target 'var/targets/nulab/backlog-mcp-server'
+```
+
+`--type oss`はOSSに必要な3製品とOPAだけを検証します。省略すると未配備のMCP ScannerとScorecardも含めて検証します。WindowsでもOPAはLinuxコンテナで実行します。
+
+レポートは`var/reports/oss/<対象>/<実行日時>/`にJSON・HTML・Markdown・CSVで出力します。`scanner_runs`がすべて`COMPLETE`であればスキャナーが完了しています。`REVIEW`・`BLOCK`は検出内容による通常の判定で、`ERROR`は検査の失敗です。DBが古い場合もpolicyに従って`REVIEW`になります。
+
+| エラー | 確認する箇所 |
+| --- | --- |
+| `SCANNER_INTEGRITY_FAILURE` | manifestの`runtime_path`とSHA-256 |
+| `UNSUPPORTED_SECURITY_REQUIREMENT` | imageが未配備のzero digestのままか |
+| `UNVERIFIED_SCANNER_IMAGE` | 同じDocker Linux engineに固定IDのimageがあるか |
+| `DB_INTEGRITY_FAILURE` | `var/cache/<scanner>/<世代>/metadata.json`と記録された全ファイル |
+| `OPA_POLICY_EVALUATION_FAILURE` | OPA image、policyの配置、Dockerの稼働状態 |
+
+MCP Scanner・Scorecard・署名/provenanceについて残る条件は[未解決の要件](../BLOCKED_SECURITY_REQUIREMENTS.md)を参照してください。

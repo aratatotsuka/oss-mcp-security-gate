@@ -91,6 +91,32 @@ func TestEvaluateOPAIntegration(t *testing.T) {
 	}
 }
 
+func TestEvaluateOPADockerIntegration(t *testing.T) {
+	image := os.Getenv("OPA_TEST_IMAGE")
+	if image == "" {
+		t.Skip("OPA_TEST_IMAGE is not set")
+	}
+	policies, err := filepath.Abs(filepath.Join("..", "..", "policies"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, blocked := range []bool{false, true} {
+		in := baseInput()
+		want := model.DecisionAllow
+		if blocked {
+			in.Findings = []model.Finding{{FindingID: "secret-1", Category: "secret", Confidence: model.ConfidenceHigh, Severity: model.SeverityHigh, ScanStatus: model.StatusComplete}}
+			want = model.DecisionBlock
+		}
+		d, err := EvaluateRuntime(image, "", policies, in, 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Decision != want {
+			t.Fatalf("Docker OPA decision: %#v, want %s", d, want)
+		}
+	}
+}
+
 func TestNoScannerResultIsError(t *testing.T) {
 	in := baseInput()
 	in.ScannerRuns = nil

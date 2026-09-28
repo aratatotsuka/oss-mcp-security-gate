@@ -2,17 +2,14 @@ package orchestrator
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/user"
 	"path/filepath"
 	"time"
 
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/audit"
+	"github.com/aratatotsuka/oss-mcp-security-gate/internal/deploy"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/exception"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/integrity"
 	"github.com/aratatotsuka/oss-mcp-security-gate/internal/manifest"
@@ -68,7 +65,7 @@ func Scan(ctx context.Context, c Config) (model.Report, error) {
 		}
 		run.Version = entry.Version
 		run.ArtifactDigest = "sha256:" + entry.ArtifactSHA256
-		if t, e := time.Parse("2006-01-02", entry.AdvisoryCheckedDate); e == nil {
+		if t, e := entry.AdvisoryReviewTime(); e == nil {
 			run.AdvisoryCheckedAt = &t
 		}
 		iv := integrity.Verify(c.Root, entry)
@@ -80,7 +77,7 @@ func Scan(ctx context.Context, c Config) (model.Report, error) {
 			continue
 		}
 		if name == "osv-scanner" || name == "trivy" {
-			meta, e := verifyDB(filepath.Join(c.Request.CacheRoot, name))
+			meta, e := verifyDB(scanners.CachePath(entry, c.Request))
 			if e != nil {
 				run.ErrorCode = "DB_INTEGRITY_FAILURE"
 				run.Message = e.Error()
@@ -138,7 +135,7 @@ func Scan(ctx context.Context, c Config) (model.Report, error) {
 	} else if iv := integrity.Verify(c.Root, opa); !iv.OK {
 		rpt.Decision = model.DecisionError
 		rpt.Reasons = append(diagnosticReasons, "OPA integrity verification failure")
-	} else if d, e := policy.EvaluateOPA(filepath.Join(c.Root, opa.RuntimePath), c.PolicyDir, in, 10*time.Second); e != nil {
+	} else if d, e := policy.EvaluateRuntime(opa.WorkerImage, filepath.Join(c.Root, opa.RuntimePath), c.PolicyDir, in, 10*time.Second); e != nil {
 		rpt.Decision = model.DecisionError
 		rpt.Reasons = append(diagnosticReasons, e.Error())
 	} else {
@@ -150,7 +147,7 @@ func Scan(ctx context.Context, c Config) (model.Report, error) {
 			rpt.ExceptionsUsed = append(rpt.ExceptionsUsed, x)
 		}
 	}
-	if err := report.Write(c.OutputPath, &rpt); err != nil {
+	if err := report.WriteBundle(c.OutputPath, &rpt); err != nil {
 		return rpt, err
 	}
 	u := "unknown"
@@ -167,41 +164,8 @@ func Scan(ctx context.Context, c Config) (model.Report, error) {
 	return rpt, nil
 }
 
-type dbMetadata struct {
-	Version   string    `json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Artifact  string    `json:"artifact"`
-	SHA256    string    `json:"sha256"`
-}
+type dbMetadata = deploy.CacheMetadata
 
 func verifyDB(cache string) (dbMetadata, error) {
-	b, e := os.ReadFile(filepath.Join(cache, "metadata.json"))
-	if e != nil {
-		return dbMetadata{}, fmt.Errorf("DB metadata unavailable: %w", e)
-	}
-	var m dbMetadata
-	if e = json.Unmarshal(b, &m); e != nil {
-		return m, fmt.Errorf("DB metadata malformed: %w", e)
-	}
-	if m.Version == "" || m.UpdatedAt.IsZero() || len(m.SHA256) != 64 {
-		return m, fmt.Errorf("DB metadata incomplete")
-	}
-	p := filepath.Join(cache, filepath.Clean(m.Artifact))
-	rel, e := filepath.Rel(cache, p)
-	if e != nil || rel == ".." || len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator) {
-		return m, fmt.Errorf("DB artifact escapes cache")
-	}
-	f, e := os.Open(p)
-	if e != nil {
-		return m, e
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, e = io.Copy(h, f); e != nil {
-		return m, e
-	}
-	if hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
-		return m, fmt.Errorf("DB hash mismatch")
-	}
-	return m, nil
+	return deploy.VerifyCache(cache)
 }

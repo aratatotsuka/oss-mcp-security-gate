@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validManifest() Manifest {
@@ -15,6 +16,34 @@ func validManifest() Manifest {
 		WorkerImage: "scanner@sha256:" + strings.Repeat("b", 64),
 		Network:     "none", AdvisoryCheckedDate: "2026-09-24",
 	}}}
+}
+
+func TestAdvisoryReviewTime(t *testing.T) {
+	for _, tc := range []struct {
+		stamp, want string
+		valid       bool
+	}{
+		{"", "2026-09-24T00:00:00Z", true},
+		{"2026-09-24T01:02:03.1234567Z", "2026-09-24T01:02:03.1234567Z", true},
+		{"2026-09-24T10:02:03+09:00", "2026-09-24T01:02:03Z", true},
+		{"2026-09-24", "", false},
+		{"2026-09-25T00:00:00Z", "", false},
+	} {
+		t.Run(tc.stamp, func(t *testing.T) {
+			m := validManifest()
+			m.Scanners[0].AdvisoryCheckedAt = tc.stamp
+			if _, err := Load(writeManifest(t, m)); (err == nil) != tc.valid {
+				t.Fatalf("load: %v", err)
+			}
+			if !tc.valid {
+				return
+			}
+			got, err := m.Scanners[0].AdvisoryReviewTime()
+			if err != nil || got.Format(time.RFC3339Nano) != tc.want {
+				t.Fatalf("got %v, %v", got, err)
+			}
+		})
+	}
 }
 
 func writeManifest(t *testing.T, m Manifest) string {

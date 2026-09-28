@@ -248,7 +248,7 @@ static negative testはnetwork none、RO mount/root、non-root、cap drop、no-n
 
 ## 32. Upgrade Procedure
 
-新versionをquarantineへ取得、official advisory/changelog確認、checksum/signature/provenance検証、fixture schema差分更新、unit/OPA/runtime isolation test、internal image build+sign、digest記録、staging shadow scan、二者承認、本番manifest rollout。`latest`や自動追従は禁止。
+新versionをquarantineへ取得、official advisory/changelog確認、checksum/signature/provenance検証、fixture schema差分更新、unit/OPA/runtime isolation test、internal image build+sign、digest記録、staging shadow scan、二者承認、本番manifest rollout。OPAはLinux Update workerでrelease asset attestation、advisory差分、候補実行ファイルのRego/Goテストを機械的に確認できた場合に限り、人間承認なしの自動manifest反映を許可する。その他のscannerは上記の承認が必要。検証を省いた`latest`追従は禁止。
 
 ## 33. Rollback Procedure
 
@@ -279,6 +279,14 @@ live接続は専用sandbox、no production credential、mock data、tool call de
 - OSV/Trivyはlockfile/package metadata品質とDB coverageに依存。
 - Gitleaks/Trivy Secretはfalse positive/negativeがある。
 - audit hash chainだけでは管理者によるlog全削除を防げず、external WORM storeが必要。
+
+### ローカルDocker配備方式の追加（2026-09-28）
+
+`deploy-oss.ps1`はOSV・Trivy・Gitleaks・OPAについて、公式HTTPSのrelease asset digestとmanifest SHA-256の照合、advisory差分確認、制限付き展開、版確認、Regoテスト、scratch image作成、DB取得と全ファイルのハッシュ記録を行う。`-PrepareOnly`で別rootに準備し、通常反映では候補検証後にmanifestをatomic replaceする。旧manifestとDB世代は保持する。
+
+この方式は署名・build provenance・DB publisher署名を検証しない。上記の組織向け署名/provenance admission要件を満たすものではなく、採用には`-AcceptOfficialDigestPolicy`の明示指定を要する。manifestの検証欄とreceiptにも範囲を記録する。厳格な組織基準では追加検証が必要で、未検証を検証済みと扱わない。
+
+同一Docker engineでは`sha256:<image-id>`を不変参照として許容し、registryの`image@sha256:...`も従来どおり許容する。inspect結果のId/RepoDigestsと完全一致を確認し、zero digestとtagだけの参照は拒否する。OPAもnetworkなし・非root・読み取り専用policyのコンテナで実行できる。OSV 2.6.0のSCALIBR実装用DB配置と`--local-db-path=/gate/cache`、Trivyのメモリ内解析cacheを用いて、読み取り専用DBで実スキャンを確認した。詳細は[配備手順](oss-deployment.md)。
 
 ## 39. Residual Risks
 

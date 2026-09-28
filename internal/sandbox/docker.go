@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/aratatotsuka/oss-mcp-security-gate/internal/containerref"
 )
 
 type Limits struct {
@@ -26,16 +28,11 @@ type DockerSpec struct {
 }
 
 func DockerArgs(s DockerSpec) ([]string, error) {
-	image, digest, ok := strings.Cut(s.Image, "@sha256:")
-	if !ok || image == "" || len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
+	if !containerref.Provisioned(s.Image) {
 		return nil, fmt.Errorf("UNSUPPORTED_SECURITY_REQUIREMENT: image must be digest-pinned")
 	}
 	if s.Network != "none" {
 		return nil, fmt.Errorf("UNSUPPORTED_SECURITY_REQUIREMENT: restricted egress requires an external enforcing proxy")
-	}
-	target, err := filepath.Abs(s.Target)
-	if err != nil {
-		return nil, err
 	}
 	if s.Limits.CPUs == "" {
 		s.Limits.CPUs = "1.0"
@@ -50,11 +47,17 @@ func DockerArgs(s DockerSpec) ([]string, error) {
 		s.Limits.PIDs = 128
 	}
 	args := []string{"run", "--rm", "--network", "none", "--read-only", "--user", "65532:65532", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--pids-limit", fmt.Sprint(s.Limits.PIDs), "--cpus", s.Limits.CPUs, "--memory", s.Limits.Memory, "--memory-swap", s.Limits.Memory, "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + s.Limits.Tmpfs}
-	mountTarget := target
-	if runtime.GOOS == "windows" {
-		mountTarget = filepath.ToSlash(target)
+	if s.Target != "" {
+		target, err := filepath.Abs(s.Target)
+		if err != nil {
+			return nil, err
+		}
+		mountTarget := target
+		if runtime.GOOS == "windows" {
+			mountTarget = filepath.ToSlash(target)
+		}
+		args = append(args, "--mount", "type=bind,src="+mountTarget+",dst=/target,readonly")
 	}
-	args = append(args, "--mount", "type=bind,src="+mountTarget+",dst=/target,readonly")
 	if s.Output != "" {
 		p, _ := filepath.Abs(s.Output)
 		args = append(args, "--mount", "type=bind,src="+filepath.ToSlash(p)+",dst=/output")
