@@ -18,7 +18,9 @@ New-Item -ItemType Directory -Force -Path $quarantine | Out-Null
 $download = Join-Path $quarantine ([IO.Path]::GetFileName(([Uri]$entry.artifact_uri).AbsolutePath))
 Invoke-WebRequest -UseBasicParsing -Uri $entry.artifact_uri -OutFile $download
 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
-if ($actual -ne $entry.artifact_sha256) { throw "SCANNER_HASH_MISMATCH; artifact remains quarantined" }
+if ($actual -ne $entry.artifact_sha256) {
+    throw "SCANNER_HASH_MISMATCH scanner=$($entry.name) expected=$($entry.artifact_sha256) actual=$actual quarantined_path=$download"
+}
 
 # Admission deliberately stops here. Signature/provenance verification commands
 # are scanner-specific and documented in docs/detailed-design.md. After those
