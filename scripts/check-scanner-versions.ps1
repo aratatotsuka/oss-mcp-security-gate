@@ -29,18 +29,18 @@ foreach ($entry in $entries) {
     $errorMessage = ''
     try {
         $artifactUri = [uri]$entry.artifact_uri
-        $headers = @{ 'User-Agent' = 'security-gate-version-check'; Accept = 'application/json' }
+        $headers = @{ Accept = 'application/json' }
         if ($artifactUri.Host -eq 'github.com' -and
             $artifactUri.AbsolutePath -match '^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/') {
             $owner = $Matches[1]
             $repo = $Matches[2]
             $source = "https://github.com/$owner/$repo/releases/latest"
             $headers.Accept = 'application/vnd.github+json'
-            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/releases/latest" -Headers $headers -TimeoutSec 20
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/releases/latest" -UserAgent 'security-gate-version-check' -Headers $headers -TimeoutSec 20
             $latest = [string]$release.tag_name
         } elseif ($entry.name -eq 'mcp-scanner' -and $artifactUri.Host -eq 'files.pythonhosted.org') {
             $source = 'https://pypi.org/project/cisco-ai-mcp-scanner/'
-            $release = Invoke-RestMethod -Uri 'https://pypi.org/pypi/cisco-ai-mcp-scanner/json' -Headers $headers -TimeoutSec 20
+            $release = Invoke-RestMethod -Uri 'https://pypi.org/pypi/cisco-ai-mcp-scanner/json' -UserAgent 'security-gate-version-check' -Headers $headers -TimeoutSec 20
             $latest = [string]$release.info.version
         } else {
             throw "No trusted release lookup for $($entry.artifact_uri)"
