@@ -60,6 +60,34 @@ function Test-NativeOPAUpdate([string]$Artifact, [string]$Version, [string]$Poli
     if ($LASTEXITCODE -ne 0) { throw "OPA policy tests failed: $output" }
 }
 
+function Test-OPAUpdateImage([string]$Image, [string]$Version, [string]$Policies) {
+    $run = @('run', '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--user', '65532:65532', '--pids-limit', '128', '--memory', '512m', '--cpus', '1', '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m', '--entrypoint', '/scanner')
+    $output = Invoke-UpdateDocker ($run + @($Image, 'version'))
+    Assert-OPAVersion ($output | Out-String) $Version
+    Invoke-UpdateDocker ($run + @('--mount', "type=bind,src=$Policies,dst=/policies,readonly", $Image, 'test', '/policies', '--fail-on-empty')) | Out-Host
+}
+
+function Test-OPARegistryUpdateImage([string]$Image, [string]$Artifact, [string]$Version, [string]$Policies, [string]$Directory) {
+    # The admitted registry image must already be loaded on this update worker.
+    # Copy from a stopped container before executing any code from the image.
+    $inspection = Join-Path $Directory ('opa-registry-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $inspection | Out-Null
+    $container = (Invoke-UpdateDocker @('create', '--pull', 'never', '--network', 'none', '--entrypoint', '/scanner', $Image, 'version') | Out-String).Trim()
+    if ($container -cnotmatch '^[0-9a-f]{64}$') { throw 'Docker returned an invalid OPA inspection container ID' }
+    try {
+        $binary = Join-Path $inspection 'scanner'
+        Invoke-UpdateDocker @('cp', ($container + ':/scanner'), $binary) | Out-Host
+        $file = Get-Item -Force -LiteralPath $binary
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $binary).Hash -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $Artifact).Hash) {
+            throw 'OPA registry image does not contain the candidate artifact at /scanner'
+        }
+    } finally {
+        Invoke-UpdateDocker @('rm', $container) | Out-Host
+    }
+    Test-OPAUpdateImage $Image $Version $Policies
+}
+
 function New-OPAUpdateImage([string]$Artifact, [string]$Version, [string]$Policies, [string]$Directory) {
     $context = Join-Path $Directory ('opa-image-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $context | Out-Null
@@ -69,9 +97,6 @@ function New-OPAUpdateImage([string]$Artifact, [string]$Version, [string]$Polici
     [IO.File]::WriteAllText((Join-Path $context 'Dockerfile'), $dockerfile, [Text.UTF8Encoding]::new($false))
     $image = (Invoke-UpdateDocker @('build', '--network', 'none', '--pull=false', '--quiet', $context) | Out-String).Trim()
     if ($image -cnotmatch '^sha256:[0-9a-f]{64}$' -or $image -cmatch '^sha256:0{64}$') { throw 'Docker returned an invalid OPA image ID' }
-    $run = @('run', '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--user', '65532:65532', '--pids-limit', '128', '--memory', '512m', '--cpus', '1', '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m')
-    $output = Invoke-UpdateDocker ($run + @($image, 'version'))
-    Assert-OPAVersion ($output | Out-String) $Version
-    Invoke-UpdateDocker ($run + @('--mount', "type=bind,src=$Policies,dst=/policies,readonly", $image, 'test', '/policies', '--fail-on-empty')) | Out-Host
+    Test-OPAUpdateImage $image $Version $Policies
     return $image
 }

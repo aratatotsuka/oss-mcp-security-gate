@@ -34,11 +34,11 @@ function Assert-Version([string]$Value) {
 
 function Get-LatestArtifact($Entry) {
     $oldUri = [uri]$Entry.artifact_uri
-    $headers = @{ 'User-Agent' = 'security-gate-version-update'; Accept = 'application/json' }
+    $headers = @{ Accept = 'application/json' }
     if ($oldUri.Host -eq 'github.com' -and $oldUri.AbsolutePath -match '^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/') {
         $owner = $Matches[1]; $repo = $Matches[2]
         $headers.Accept = 'application/vnd.github+json'
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/releases/latest" -Headers $headers -TimeoutSec 30
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo/releases/latest" -UserAgent 'security-gate-version-update' -Headers $headers -TimeoutSec 30
         $version = ([string]$release.tag_name) -replace '^[vV]', ''
         $null = Assert-Version $version
         if ($release.draft -or $release.prerelease) { throw "Latest release is not stable: $($Entry.name)" }
@@ -57,7 +57,7 @@ function Get-LatestArtifact($Entry) {
         $sha = ([string]$asset.digest) -replace '^sha256:', ''
         $source = "https://api.github.com/repos/$owner/$repo/releases/latest"
     } elseif ($Entry.name -eq 'mcp-scanner' -and $oldUri.Host -eq 'files.pythonhosted.org') {
-        $release = Invoke-RestMethod -Uri 'https://pypi.org/pypi/cisco-ai-mcp-scanner/json' -Headers $headers -TimeoutSec 30
+        $release = Invoke-RestMethod -Uri 'https://pypi.org/pypi/cisco-ai-mcp-scanner/json' -UserAgent 'security-gate-version-update' -Headers $headers -TimeoutSec 30
         $version = [string]$release.info.version
         $null = Assert-Version $version
         $newFile = "cisco_ai_mcp_scanner-$version-py3-none-any.whl"
@@ -136,6 +136,9 @@ if ($Mode -eq 'Prepare') {
     return
 }
 
+if ($Mode -eq 'Auto' -and @($manifest.scanners | Where-Object { $_.name -eq 'opa' -and -not [string]::IsNullOrWhiteSpace([string]$_.worker_image) -and $_.worker_image -cnotmatch '^sha256:[0-9a-f]{64}$' }).Count -gt 0) {
+    throw 'AUTO_UPDATE_UNSUPPORTED: registry-backed OPA requires an admitted registry digest in -Mode Apply; local image IDs cannot replace it'
+}
 if ($Mode -eq 'Auto' -and -not $Candidate) {
     if ($ApprovalRecord) { throw '-ApprovalRecord is not used with -Mode Auto' }
     if ($Scanner -and (@($Scanner | Where-Object { $_ -ne 'opa' }).Count -gt 0)) {
@@ -196,11 +199,11 @@ if ($Mode -eq 'Auto') {
     $attestationPath = Join-Path $candidateDir 'release-attestation.json'
     [IO.File]::WriteAllText($attestationPath, (($attestation | Out-String).Trim() + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 
-    $headers = @{ 'User-Agent' = 'security-gate-auto-update'; Accept = 'application/vnd.github+json' }
+    $headers = @{ Accept = 'application/vnd.github+json' }
     # Capture before the request; advisories published while tests run must be
     # discovered on the next update rather than counted as already reviewed.
     $advisoryCheckedAt = [datetimeoffset]::UtcNow
-    $advisoryResponse = Invoke-RestMethod -Uri 'https://api.github.com/repos/open-policy-agent/opa/security-advisories?state=published&per_page=100' -Headers $headers -TimeoutSec 30
+    $advisoryResponse = Invoke-RestMethod -Uri 'https://api.github.com/repos/open-policy-agent/opa/security-advisories?state=published&per_page=100' -UserAgent 'security-gate-auto-update' -Headers $headers -TimeoutSec 30
     $advisories = @($advisoryResponse)
     if ($advisories.Count -ge 100) { throw 'Advisory list may be incomplete; automatic promotion stopped' }
     $reviewedThrough = Get-AdvisoryReviewTime $entry
@@ -260,9 +263,17 @@ if ($Mode -eq 'Auto') {
 if ($entry.name -eq 'opa') {
     if ([string]::IsNullOrWhiteSpace([string]$entry.worker_image)) {
         if ($Mode -eq 'Apply') { Test-NativeOPAUpdate $artifact ([string]$candidateData.version) (Join-Path $rootPath 'policies') }
-    } else {
+    } elseif ([string]$entry.worker_image -cmatch '^sha256:[0-9a-f]{64}$') {
         # Preserve Docker execution and bind it to this exact candidate.
         $entry.worker_image = New-OPAUpdateImage $artifact ([string]$candidateData.version) (Join-Path $rootPath 'policies') $candidateDir
+    } else {
+        $image = [string]$approval.worker_image
+        if ($image -cnotmatch '^\S+@sha256:[0-9a-f]{64}$' -or $image -match '@sha256:0{64}$' -or
+            $image -match 'registry\.example\.invalid' -or $image -ceq [string]$entry.worker_image) {
+            throw 'Registry-backed OPA approval requires a new real immutable worker image digest'
+        }
+        Test-OPARegistryUpdateImage $image $artifact ([string]$candidateData.version) (Join-Path $rootPath 'policies') $candidateDir
+        $entry.worker_image = $image
     }
 }
 $newRuntime = ([string]$entry.runtime_path).Replace([string]$entry.approved_version, [string]$candidateData.version)
@@ -270,7 +281,14 @@ if ($newRuntime -ceq [string]$entry.runtime_path -or [IO.Path]::GetFileName($new
     throw 'Candidate runtime path could not be derived safely'
 }
 $runtimePath = Assert-WithinRoot (Join-Path $rootPath $newRuntime)
-if (Test-Path -LiteralPath $runtimePath) { throw "Runtime artifact already exists: $runtimePath" }
+$reuseRuntime = Test-Path -LiteralPath $runtimePath
+if ($reuseRuntime) {
+    $file = Get-Item -Force -LiteralPath $runtimePath
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        (Get-Sha256 $runtimePath) -cne [string]$candidateData.artifact_sha256) {
+        throw "Existing runtime artifact does not match candidate: $runtimePath"
+    }
+}
 $entry.approved_version = [string]$candidateData.version
 $entry.artifact_uri = [string]$candidateData.artifact_uri
 $entry.artifact_sha256 = [string]$candidateData.artifact_sha256
@@ -282,7 +300,7 @@ if ([string]::IsNullOrWhiteSpace($entry.signature_verification) -or [string]::Is
     throw 'Approval must document signature_method and provenance_method'
 }
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimePath) | Out-Null
-Copy-Item -LiteralPath $artifact -Destination $runtimePath
+if (-not $reuseRuntime) { [IO.File]::Copy($artifact, $runtimePath, $false) }
 if ((Get-Sha256 $runtimePath) -cne [string]$candidateData.artifact_sha256) { throw 'Copied runtime artifact SHA-256 mismatch' }
 if ($entry.name -eq 'opa' -and [string]::IsNullOrWhiteSpace([string]$entry.worker_image)) {
     Test-NativeOPAUpdate $runtimePath ([string]$candidateData.version) (Join-Path $rootPath 'policies')
