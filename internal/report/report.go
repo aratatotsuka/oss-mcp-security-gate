@@ -82,6 +82,15 @@ func Write(path string, r *model.Report) error {
 }
 
 func atomicWrite(path string, data []byte) (err error) {
+	tmpPath, err := stageWrite(path, data)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpPath)
+	return publishStaged(path, tmpPath)
+}
+
+func validateDestination(path string) error {
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("refusing non-regular report destination")
@@ -89,34 +98,49 @@ func atomicWrite(path string, data []byte) (err error) {
 	} else if !os.IsNotExist(statErr) {
 		return statErr
 	}
+	return nil
+}
 
+func stageWrite(path string, data []byte) (tmpPath string, err error) {
+	if err = validateDestination(path); err != nil {
+		return "", err
+	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".security-gate-report-*")
 	if err != nil {
-		return err
+		return "", err
 	}
-	tmpPath := tmp.Name()
+	tmpPath = tmp.Name()
 	defer func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+		}
 	}()
 	if err = tmp.Chmod(0600); err != nil {
-		return err
+		return "", err
 	}
 	if _, err = tmp.Write(data); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Close(); err != nil {
+		return "", err
+	}
+	return tmpPath, nil
+}
+
+func publishStaged(path, tmpPath string) error {
+	if err := validateDestination(path); err != nil {
 		return err
 	}
 	// os.Rename replaces an existing file atomically on Unix. Windows requires
 	// removing the already-validated regular destination first.
 	if runtime.GOOS == "windows" {
 		if _, statErr := os.Lstat(path); statErr == nil {
-			if err = os.Remove(path); err != nil {
+			if err := os.Remove(path); err != nil {
 				return err
 			}
 		} else if !os.IsNotExist(statErr) {

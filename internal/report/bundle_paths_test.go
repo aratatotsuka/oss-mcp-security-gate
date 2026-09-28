@@ -42,3 +42,56 @@ func TestWriteBundlePreservesJSONForOutputExtensions(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteBundleStageFailureDoesNotPublish(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		for _, badView := range []int{0, 1, 2, 3} {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "report.json")
+			views := Paths(path)
+			paths := []string{views.HTML, views.Markdown, views.FindingsCSV, views.ReviewRequiredCSV, path}
+			if existing {
+				old := model.Report{Decision: model.DecisionBlock, TargetID: "previous"}
+				if err := WriteBundle(path, &old); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(paths[badView]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Mkdir(paths[badView], 0700); err != nil {
+				t.Fatal(err)
+			}
+			before := map[string]string{}
+			for i, p := range paths {
+				if existing && i != badView {
+					b, err := os.ReadFile(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before[p] = string(b)
+				}
+			}
+			if err := WriteBundle(path, &model.Report{Decision: model.DecisionAllow, TargetID: "new"}); err == nil {
+				t.Fatal("non-regular view was accepted")
+			}
+			for i, p := range paths {
+				if i == badView {
+					continue
+				}
+				b, err := os.ReadFile(p)
+				if existing {
+					if err != nil || string(b) != before[p] {
+						t.Fatalf("previous bundle changed: %s, %v", p, err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("failed bundle published %s: %v", p, err)
+				}
+			}
+			temps, err := filepath.Glob(filepath.Join(dir, ".security-gate-report-*"))
+			if err != nil || len(temps) != 0 {
+				t.Fatalf("staged files leaked: %v, %v", temps, err)
+			}
+		}
+	}
+}

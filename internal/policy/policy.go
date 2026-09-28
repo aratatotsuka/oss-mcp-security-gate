@@ -141,7 +141,7 @@ func EvaluateRuntime(image, opaPath, policyDir string, in model.PolicyInput, tim
 	if image == "" {
 		return EvaluateOPA(opaPath, policyDir, in, timeout)
 	}
-	args, err := sandbox.DockerArgs(sandbox.DockerSpec{Image: image, Config: policyDir, Network: "none", Command: []string{"eval", "--fail", "--format=json", "--data", "/gate/config", "--stdin-input", "data.security_gate.result"}})
+	args, err := sandbox.DockerArgs(sandbox.DockerSpec{Image: image, Entrypoint: "/scanner", Config: policyDir, Network: "none", Command: []string{"eval", "--fail", "--format=json", "--data", "/gate/config", "--stdin-input", "data.security_gate.result"}})
 	if err != nil {
 		return model.PolicyDecision{}, err
 	}

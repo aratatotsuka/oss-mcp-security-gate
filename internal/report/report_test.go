@@ -120,6 +120,9 @@ func TestWriteBundleRejectsSymlinkArtifact(t *testing.T) {
 	if err := WriteBundle(filepath.Join(dir, "scan.json"), &model.Report{}); err == nil {
 		t.Fatal("symlink artifact accepted")
 	}
+	if _, err := os.Stat(filepath.Join(dir, "scan.json")); !os.IsNotExist(err) {
+		t.Fatalf("failed bundle published authoritative JSON: %v", err)
+	}
 	b, err := os.ReadFile(target)
 	if err != nil || string(b) != "preserve" {
 		t.Fatalf("symlink target changed: %q, %v", b, err)

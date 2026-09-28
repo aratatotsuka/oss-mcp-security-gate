@@ -3,8 +3,10 @@ package report
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"os"
 	"sort"
 	"strings"
 
@@ -15,7 +17,11 @@ import (
 // WriteBundle keeps the requested JSON path and writes human-readable siblings.
 // The JSON is the authoritative, hashed report; the other formats are views.
 func WriteBundle(path string, r *model.Report) error {
-	if err := Write(path, r); err != nil {
+	if err := Seal(r); err != nil {
+		return err
+	}
+	jsonData, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
 		return err
 	}
 	paths := Paths(path)
@@ -28,9 +34,25 @@ func WriteBundle(path string, r *model.Report) error {
 		{paths.Markdown, renderMarkdown(v)},
 		{paths.FindingsCSV, renderCSV(v.Findings)},
 		{paths.ReviewRequiredCSV, renderCSV(v.Attention)},
+		{path, append(jsonData, '\n')},
 	}
+	// Prepare every file before publishing any view. JSON is published last so
+	// a failed bundle never exposes a new authoritative decision without audit.
+	staged := make([]string, 0, len(artifacts))
+	defer func() {
+		for _, tmp := range staged {
+			_ = os.Remove(tmp)
+		}
+	}()
 	for _, artifact := range artifacts {
-		if err := atomicWrite(artifact.path, artifact.data); err != nil {
+		tmp, err := stageWrite(artifact.path, artifact.data)
+		if err != nil {
+			return fmt.Errorf("stage report artifact %s: %w", artifact.path, err)
+		}
+		staged = append(staged, tmp)
+	}
+	for i, artifact := range artifacts {
+		if err := publishStaged(artifact.path, staged[i]); err != nil {
 			return fmt.Errorf("write report artifact %s: %w", artifact.path, err)
 		}
 	}
